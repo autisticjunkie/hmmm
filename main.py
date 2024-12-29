@@ -228,23 +228,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show top 10 inviters"""
     try:
-        top_inviters = await db.get_leaderboard()
+        top_inviters = await db.get_leaderboard(limit=10)  # Explicitly set limit to 10
         
         if not top_inviters:
-            await update.message.reply_text("No referrals yet! Be the first to invite someone! 🎯")
+            await update.message.reply_text("🏆 No referrals yet! Be the first to invite someone! 🎯")
             return
 
-        leaderboard_text = "🏆 <b>Top Inviters</b> 🏆\n\n"
+        leaderboard_text = "🏆 <b>Top 10 Inviters</b> 🏆\n\n"
         for rank, (user_id, referrals) in enumerate(top_inviters, 1):
-            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, "👤")
+            # Special medals for top 3
+            medal = {
+                1: "🥇", 
+                2: "🥈", 
+                3: "🥉"
+            }.get(rank, f"{rank}.")
+
             try:
                 user = await context.bot.get_chat(user_id)
-                username = user.username or user.first_name or str(user_id)
-                leaderboard_text += f"{medal} {rank}. @{username}: {referrals} active referrals\n"
-            except:
-                leaderboard_text += f"{medal} {rank}. User {user_id}: {referrals} active referrals\n"
+                name = user.username or user.first_name or str(user_id)
+                name = f"@{name}" if user.username else name
+                
+                # Add stars based on referral count
+                stars = "⭐" * min(5, referrals)  # Max 5 stars
+                
+                leaderboard_text += (
+                    f"{medal} {name}\n"
+                    f"└ {referrals} referrals {stars}\n\n"
+                )
+            except Exception as e:
+                logger.error(f"Error getting user info for {user_id}: {e}")
+                leaderboard_text += f"{medal} User {user_id}: {referrals} referrals\n\n"
 
-        await update.message.reply_text(leaderboard_text, parse_mode='HTML')
+        footer = (
+            "ℹ️ <i>Invite more members to climb the leaderboard!\n"
+            "Use /start to get your referral link</i>"
+        )
+        await update.message.reply_text(
+            f"{leaderboard_text}\n{footer}",
+            parse_mode='HTML',
+            disable_web_page_preview=True
+        )
     except Exception as e:
         logger.error(f"Error showing leaderboard: {e}", exc_info=True)
         await update.message.reply_text("❌ Error fetching leaderboard. Please try again later.")
