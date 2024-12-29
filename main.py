@@ -5,6 +5,7 @@ from database import Database
 import time
 import os
 from aiohttp import web
+import ssl
 
 # Enable logging
 logging.basicConfig(
@@ -20,12 +21,15 @@ db = Database()
 GROUP_ID = -1002384613497
 
 # Webhook settings
-WEBHOOK_HOST = 'https://telegram-referral-bot.onrender.com'  # Change this to your Render URL
+DOMAIN = os.environ.get('DOMAIN', 'your-domain.com')  # Your Cloudflare domain
 WEBHOOK_PATH = '/webhook'
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+WEBHOOK_URL = f"https://{DOMAIN}{WEBHOOK_PATH}"
 
 # Port is given by Render
 PORT = int(os.environ.get('PORT', '8080'))
+
+# Telegram Bot Token
+TOKEN = os.environ.get('BOT_TOKEN', '7790381038:AAE26s1oHYvlZX2wyY_cW7VsjJmNaxXFlYc')
 
 async def track_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Track when users join or leave the group"""
@@ -265,12 +269,21 @@ async def my_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Error fetching your stats. Please try again later.")
 
 async def setup_webhook(application: Application) -> None:
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-    logger.info(f"Webhook set up at {WEBHOOK_URL}")
+    webhook_info = await application.bot.get_webhook_info()
+    
+    # Only set webhook if it's not already set correctly
+    if webhook_info.url != WEBHOOK_URL:
+        logger.info(f"Setting webhook to {WEBHOOK_URL}")
+        await application.bot.set_webhook(
+            url=WEBHOOK_URL,
+            allowed_updates=['message', 'chat_member', 'callback_query'],
+            secret_token=os.environ.get('WEBHOOK_SECRET', 'your-secret-token')  # Add this in Render env vars
+        )
+        logger.info("Webhook set successfully")
+    else:
+        logger.info("Webhook already set correctly")
 
 async def main():
-    token = "7790381038:AAE26s1oHYvlZX2wyY_cW7VsjJmNaxXFlYc"
-    
     try:
         # Initialize database first
         logger.info("Initializing database...")
@@ -278,7 +291,7 @@ async def main():
         logger.info("Database initialized successfully")
 
         # Initialize bot
-        application = Application.builder().token(token).build()
+        application = Application.builder().token(TOKEN).build()
 
         # Add command handlers
         application.add_handler(CommandHandler("start", start))
@@ -297,6 +310,13 @@ async def main():
         # Handle webhook calls
         async def handle_webhook(request):
             try:
+                # Verify webhook secret
+                secret_header = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
+                if secret_header != os.environ.get('WEBHOOK_SECRET', 'your-secret-token'):
+                    logger.warning("Invalid webhook secret token")
+                    return web.Response(status=403)
+                
+                # Process update
                 update = await Update.de_json(await request.json(), application.bot)
                 await application.process_update(update)
                 return web.Response()
@@ -304,7 +324,9 @@ async def main():
                 logger.error(f"Error processing webhook: {e}", exc_info=True)
                 return web.Response(status=500)
 
+        # Add routes
         app.router.add_post(WEBHOOK_PATH, handle_webhook)
+        app.router.add_get("/", lambda r: web.Response(text="Bot is running"))
         
         # Start web server
         logger.info(f"Starting webhook server on port {PORT}")
