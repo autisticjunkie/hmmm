@@ -21,9 +21,9 @@ db = Database()
 GROUP_ID = -1002384613497
 
 # Webhook settings
-DOMAIN = os.environ.get('DOMAIN', 'patoonsol.xyz').rstrip('/')  # Remove trailing slash if present
+RENDER_DOMAIN = os.environ.get('RENDER_DOMAIN', 'your-app-name.onrender.com').rstrip('/')  # Your Render domain
 WEBHOOK_PATH = '/webhook'
-WEBHOOK_URL = f"https://{DOMAIN}{WEBHOOK_PATH}"
+WEBHOOK_URL = f"https://{RENDER_DOMAIN}{WEBHOOK_PATH}"
 
 # Port is given by Render
 PORT = int(os.environ.get('PORT', '8080'))
@@ -273,7 +273,7 @@ async def setup_webhook(application: Application) -> None:
     
     # Detailed debug information
     logger.info("=== Webhook Debug Info ===")
-    logger.info(f"DOMAIN env var: {os.environ.get('DOMAIN', 'not set')}")
+    logger.info(f"RENDER_DOMAIN env var: {os.environ.get('RENDER_DOMAIN', 'not set')}")
     logger.info(f"Current webhook URL: {webhook_info.url}")
     logger.info(f"Attempting to set webhook URL: {WEBHOOK_URL}")
     logger.info(f"Bot username: {(await application.bot.get_me()).username}")
