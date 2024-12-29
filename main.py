@@ -21,7 +21,8 @@ db = Database()
 GROUP_ID = -1002384613497
 
 # Webhook settings
-DOMAIN = os.environ.get('DOMAIN', 'your-domain.com')  # Your Cloudflare domain
+RENDER_URL = os.environ.get('RENDER_URL', '')  # Your Render URL
+DOMAIN = os.environ.get('DOMAIN', RENDER_URL.replace('https://', '') if RENDER_URL else 'your-app-name.onrender.com')
 WEBHOOK_PATH = '/webhook'
 WEBHOOK_URL = f"https://{DOMAIN}{WEBHOOK_PATH}"
 
@@ -271,15 +272,45 @@ async def my_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def setup_webhook(application: Application) -> None:
     webhook_info = await application.bot.get_webhook_info()
     
+    # Detailed debug information
+    logger.info("=== Webhook Debug Info ===")
+    logger.info(f"DOMAIN env var: {os.environ.get('DOMAIN', 'not set')}")
+    logger.info(f"Current webhook URL: {webhook_info.url}")
+    logger.info(f"Attempting to set webhook URL: {WEBHOOK_URL}")
+    logger.info(f"Bot username: {(await application.bot.get_me()).username}")
+    logger.info("========================")
+    
+    # Test the webhook URL
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(WEBHOOK_URL) as response:
+                logger.info(f"Webhook URL test status: {response.status}")
+    except Exception as e:
+        logger.error(f"Failed to test webhook URL: {str(e)}")
+    
     # Only set webhook if it's not already set correctly
     if webhook_info.url != WEBHOOK_URL:
         logger.info(f"Setting webhook to {WEBHOOK_URL}")
-        await application.bot.set_webhook(
-            url=WEBHOOK_URL,
-            allowed_updates=['message', 'chat_member', 'callback_query'],
-            secret_token=os.environ.get('WEBHOOK_SECRET', 'your-secret-token')  # Add this in Render env vars
-        )
-        logger.info("Webhook set successfully")
+        try:
+            # Try to delete existing webhook first
+            await application.bot.delete_webhook()
+            logger.info("Deleted existing webhook")
+            
+            # Set new webhook
+            await application.bot.set_webhook(
+                url=WEBHOOK_URL,
+                allowed_updates=['message', 'chat_member', 'callback_query'],
+                secret_token=os.environ.get('WEBHOOK_SECRET', 'your-secret-token')
+            )
+            logger.info("Webhook set successfully")
+            
+            # Verify webhook was set
+            new_webhook_info = await application.bot.get_webhook_info()
+            logger.info(f"New webhook URL: {new_webhook_info.url}")
+            
+        except Exception as e:
+            logger.error(f"Failed to set webhook: {str(e)}", exc_info=True)
     else:
         logger.info("Webhook already set correctly")
 
