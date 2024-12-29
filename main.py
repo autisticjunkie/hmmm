@@ -3,6 +3,8 @@ from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes, ChatMemberHandler, filters, MessageHandler
 from database import Database
 import time
+import os
+from aiohttp import web
 
 # Enable logging
 logging.basicConfig(
@@ -16,6 +18,14 @@ db = Database()
 
 # Your group ID (make sure it starts with -100 for supergroups)
 GROUP_ID = -1002384613497
+
+# Webhook settings
+WEBHOOK_HOST = 'https://telegram-referral-bot.onrender.com'  # Change this to your Render URL
+WEBHOOK_PATH = '/webhook'
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
+# Port is given by Render
+PORT = int(os.environ.get('PORT', '8080'))
 
 async def track_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Track when users join or leave the group"""
@@ -254,10 +264,20 @@ async def my_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error showing referral stats: {e}", exc_info=True)
         await update.message.reply_text("❌ Error fetching your stats. Please try again later.")
 
-def main():
+async def setup_webhook(application: Application) -> None:
+    await application.bot.set_webhook(url=WEBHOOK_URL)
+    logger.info(f"Webhook set up at {WEBHOOK_URL}")
+
+async def main():
     token = "7790381038:AAE26s1oHYvlZX2wyY_cW7VsjJmNaxXFlYc"
     
     try:
+        # Initialize database first
+        logger.info("Initializing database...")
+        await db.init_db()
+        logger.info("Database initialized successfully")
+
+        # Initialize bot
         application = Application.builder().token(token).build()
 
         # Add command handlers
@@ -268,16 +288,38 @@ def main():
         # Add chat member handler with high priority (group=1)
         application.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.CHAT_MEMBER), group=1)
 
-        logger.info("Starting bot...")
-        logger.info(f"Using group ID: {GROUP_ID}")
-        # Explicitly specify the updates we want to receive
-        application.run_polling(
-            allowed_updates=['chat_member', 'message', 'callback_query'],
-            drop_pending_updates=True
-        )
+        # Set up webhook
+        await setup_webhook(application)
         
+        # Start web application
+        app = web.Application()
+        
+        # Handle webhook calls
+        async def handle_webhook(request):
+            try:
+                update = await Update.de_json(await request.json(), application.bot)
+                await application.process_update(update)
+                return web.Response()
+            except Exception as e:
+                logger.error(f"Error processing webhook: {e}", exc_info=True)
+                return web.Response(status=500)
+
+        app.router.add_post(WEBHOOK_PATH, handle_webhook)
+        
+        # Start web server
+        logger.info(f"Starting webhook server on port {PORT}")
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
+        await site.start()
+        
+        # Keep the app running
+        while True:
+            await asyncio.sleep(3600)  # Sleep for 1 hour
+            
     except Exception as e:
         logger.error(f"Error starting bot: {e}", exc_info=True)
 
 if __name__ == '__main__':
-    main()
+    import asyncio
+    asyncio.run(main())

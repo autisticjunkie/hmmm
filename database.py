@@ -1,14 +1,21 @@
 import aiosqlite
 import logging
+import os
 
 class Database:
     def __init__(self, db_name: str = "referral_bot.db"):
         self.db_name = db_name
+        # Ensure the database directory exists and is writable
+        db_dir = os.path.dirname(os.path.abspath(db_name))
+        if not os.path.exists(db_dir):
+            os.makedirs(db_dir)
+        
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
     async def init_db(self):
         try:
+            self.logger.info(f"Initializing database at {os.path.abspath(self.db_name)}")
             async with aiosqlite.connect(self.db_name) as db:
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS users (
@@ -22,8 +29,15 @@ class Database:
                 ''')
                 await db.commit()
                 self.logger.info("Database initialized successfully")
+                
+                # Verify table exists
+                async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'") as cursor:
+                    if not await cursor.fetchone():
+                        raise Exception("Failed to create users table")
+                        
         except Exception as e:
-            self.logger.error(f"Error initializing database: {e}")
+            self.logger.error(f"Error initializing database: {e}", exc_info=True)
+            raise
 
     async def get_inviter(self, telegram_id: int) -> int:
         """Get the inviter ID for a user"""
