@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 db = Database()
 
 # Your group ID (make sure it starts with -100 for supergroups)
-GROUP_ID = -1002384613497
+GROUP_ID = int(os.environ.get('GROUP_ID', '-1002384613497'))
 
 # Webhook settings
 DOMAIN = os.environ.get('DOMAIN', 'bot.patoonsol.xyz').rstrip('/')  # Your Cloudflare domain
