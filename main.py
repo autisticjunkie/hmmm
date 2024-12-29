@@ -21,8 +21,7 @@ db = Database()
 GROUP_ID = -1002384613497
 
 # Webhook settings
-RENDER_URL = os.environ.get('RENDER_URL', '')  # Your Render URL
-DOMAIN = os.environ.get('DOMAIN', RENDER_URL.replace('https://', '') if RENDER_URL else 'your-app-name.onrender.com')
+DOMAIN = os.environ.get('DOMAIN', 'patoonsol.xyz').rstrip('/')  # Remove trailing slash if present
 WEBHOOK_PATH = '/webhook'
 WEBHOOK_URL = f"https://{DOMAIN}{WEBHOOK_PATH}"
 
