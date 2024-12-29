@@ -314,6 +314,8 @@ async def setup_webhook(application: Application) -> None:
         logger.info("Webhook already set correctly")
 
 async def main():
+    application = None
+    runner = None
     try:
         # Initialize database first
         logger.info("Initializing database...")
@@ -341,6 +343,9 @@ async def main():
         # Add chat member handler with high priority (group=1)
         application.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.CHAT_MEMBER), group=1)
 
+        # Initialize the application
+        await application.initialize()
+        
         # Set up webhook
         await setup_webhook(application)
         
@@ -369,6 +374,7 @@ async def main():
                 if update:
                     logger.info(f"Successfully created Update object: {update}")
                     await application.process_update(update)
+                    logger.info("Successfully processed update")
                     return web.Response()
                 else:
                     logger.error("Failed to create Update object from data")
@@ -389,12 +395,24 @@ async def main():
         site = web.TCPSite(runner, '0.0.0.0', PORT)
         await site.start()
         
+        # Start the application
+        await application.start()
+        
+        logger.info("Bot started successfully!")
+        
         # Keep the app running
         while True:
             await asyncio.sleep(3600)  # Sleep for 1 hour
             
     except Exception as e:
         logger.error(f"Error starting bot: {e}", exc_info=True)
+    finally:
+        # Cleanup
+        logger.info("Cleaning up...")
+        if application:
+            await application.stop()
+        if runner:
+            await runner.cleanup()
 
 if __name__ == '__main__':
     import asyncio
