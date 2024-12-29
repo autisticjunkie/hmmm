@@ -350,18 +350,32 @@ async def main():
         # Handle webhook calls
         async def handle_webhook(request):
             try:
+                # Log request information
+                logger.info("Received webhook request")
+                logger.info(f"Request headers: {dict(request.headers)}")
+                
+                # Get the request data
+                json_data = await request.json()
+                logger.info(f"Request data: {json_data}")
+                
                 # Verify webhook secret
                 secret_header = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
                 if secret_header != os.environ.get('WEBHOOK_SECRET', 'your-secret-token'):
-                    logger.warning("Invalid webhook secret token")
+                    logger.warning(f"Invalid webhook secret token. Expected: {os.environ.get('WEBHOOK_SECRET')}, Got: {secret_header}")
                     return web.Response(status=403)
                 
-                # Process update
-                update = await Update.de_json(await request.json(), application.bot)
-                await application.process_update(update)
-                return web.Response()
+                # Create update object
+                update = Update.de_json(json_data, application.bot)
+                if update:
+                    logger.info(f"Successfully created Update object: {update}")
+                    await application.process_update(update)
+                    return web.Response()
+                else:
+                    logger.error("Failed to create Update object from data")
+                    return web.Response(status=400)
+                    
             except Exception as e:
-                logger.error(f"Error processing webhook: {e}", exc_info=True)
+                logger.error(f"Error processing webhook: {str(e)}", exc_info=True)
                 return web.Response(status=500)
 
         # Add routes
