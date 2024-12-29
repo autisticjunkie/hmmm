@@ -1,0 +1,283 @@
+import logging
+from telegram import Update, BotCommand
+from telegram.ext import Application, CommandHandler, ContextTypes, ChatMemberHandler, filters, MessageHandler
+from database import Database
+import time
+
+# Enable logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Initialize database
+db = Database()
+
+# Your group ID (make sure it starts with -100 for supergroups)
+GROUP_ID = -1002384613497
+
+async def track_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Track when users join or leave the group"""
+    try:
+        if not update.chat_member:
+            return
+
+        chat_id = update.chat_member.chat.id
+        if chat_id != GROUP_ID:
+            return
+
+        new_member = update.chat_member.new_chat_member
+        old_member = update.chat_member.old_chat_member
+        
+        if not new_member or not old_member:
+            return
+
+        user_id = new_member.user.id
+        
+        # Skip updates that don't represent actual status changes
+        if new_member.status == old_member.status:
+            logger.info(f"Skipping duplicate status update for user {user_id}")
+            return
+            
+        logger.info(f"Member status change - User: {user_id}, Old: {old_member.status}, New: {new_member.status}")
+        
+        # Handle member leaving
+        if new_member.status in ['left', 'kicked', 'banned'] and old_member.status == 'member':
+            logger.info(f"User {user_id} left the group")
+            success = await db.remove_user(user_id)
+            if success:
+                inviter_id = await db.get_inviter(user_id)
+                if inviter_id:
+                    active_referrals = await db.get_active_referrals(inviter_id)
+                    await context.bot.send_message(
+                        chat_id=inviter_id,
+                        text=f"ℹ️ One of your referred users left the group.\nYou now have {active_referrals} active referrals.",
+                        parse_mode='HTML'
+                    )
+            
+        # Handle member joining
+        elif new_member.status == 'member' and old_member.status in ['left', 'kicked', 'banned']:
+            inviter_id = None
+            invite_info = None
+
+            # Try to get invite link information
+            if hasattr(update.chat_member, 'invite_link') and update.chat_member.invite_link:
+                invite_link = update.chat_member.invite_link
+                logger.info(f"Invite link used: {invite_link.name}")
+                
+                if invite_link.name and invite_link.name.startswith('ref_'):
+                    try:
+                        inviter_id = int(invite_link.name.split('_')[1])
+                        logger.info(f"Found inviter_id {inviter_id} from invite link {invite_link.name}")
+                        invite_info = invite_link.name
+                    except (IndexError, ValueError) as e:
+                        logger.error(f"Error extracting inviter_id from invite link: {e}")
+            
+            if inviter_id and inviter_id != user_id:
+                logger.info(f"Processing join for user {user_id} invited by {inviter_id}")
+                # First ensure inviter exists in database
+                await db.add_user(inviter_id)
+                
+                # Add new user with referrer
+                success = await db.add_user(user_id, inviter_id)
+                logger.info(f"Added user {user_id} with inviter {inviter_id}, success: {success}")
+                
+                if success:
+                    active_referrals = await db.get_active_referrals(inviter_id)
+                    logger.info(f"Inviter {inviter_id} now has {active_referrals} active referrals")
+                    try:
+                        inviter_msg = (
+                            f"🎉 New referral! User {new_member.user.first_name} joined using your invite link!\n"
+                            f"Your active referrals: {active_referrals} 🌟\n"
+                            f"Invite link used: {invite_info}"
+                        )
+                        await context.bot.send_message(
+                            chat_id=inviter_id,
+                            text=inviter_msg,
+                            parse_mode='HTML'
+                        )
+                        logger.info(f"Sent notification to inviter {inviter_id}")
+                    except Exception as e:
+                        logger.error(f"Could not send notification to inviter: {e}")
+            else:
+                # User joined without referral
+                logger.info(f"User {user_id} joined without referral")
+                await db.add_user(user_id)
+                
+    except Exception as e:
+        logger.error(f"Error in track_chat_member: {e}", exc_info=True)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user:
+        return
+
+    user_id = update.effective_user.id
+    chat_type = update.effective_chat.type
+
+    if chat_type == 'private':
+        try:
+            # Check bot permissions
+            try:
+                # Get bot's member info
+                bot_member = await context.bot.get_chat_member(GROUP_ID, context.bot.id)
+                logger.info(f"Bot status in group: {bot_member.status}")
+                
+                if bot_member.status != 'administrator':
+                    raise Exception("Bot must be an admin in the group")
+                
+                # Get chat info to verify group type
+                chat = await context.bot.get_chat(GROUP_ID)
+                if not chat.type in ['supergroup', 'group']:
+                    raise Exception("Invalid group type. Must be a supergroup or group")
+
+                # Try a test invite link to verify permissions
+                test_link = None
+                try:
+                    test_link = await context.bot.create_chat_invite_link(
+                        chat_id=GROUP_ID,
+                        name="test_link",
+                        creates_join_request=False,
+                        expire_date=int(time.time()) + 30,  # 30 seconds expiry
+                        member_limit=1
+                    )
+                    if test_link:
+                        # If we got here, we have invite link permission
+                        # Revoke the test link
+                        await context.bot.revoke_chat_invite_link(GROUP_ID, test_link.invite_link)
+                except Exception as e:
+                    raise Exception("Bot cannot create invite links. Please check admin rights")
+
+            except Exception as e:
+                logger.error(f"Permission check failed: {e}")
+                raise Exception(f"Permission check failed: {str(e)}")
+
+            # Create actual invite link
+            try:
+                current_time = int(time.time())
+                invite_link = await context.bot.create_chat_invite_link(
+                    chat_id=GROUP_ID,
+                    name=f"ref_{user_id}_{current_time}",
+                    creates_join_request=False,
+                    expire_date=None,
+                    member_limit=None
+                )
+                logger.info(f"Successfully created invite link for user {user_id}")
+            except Exception as e:
+                logger.error(f"Error creating invite link: {e}")
+                raise Exception(f"Failed to create invite link: {str(e)}")
+            
+            # Add user to database if not exists
+            await db.add_user(user_id)
+            
+            welcome_msg = (
+                "🎉 <b>Welcome to the Referral Program!</b> 🎉\n\n"
+                f"📱 <b>Your unique invite link:</b>\n{invite_link.invite_link}\n\n"
+                "🔥 Share this link to invite others to the group!\n\n"
+                "📊 <b>Available Commands:</b>\n"
+                "👉 /start - Get a new invite link\n"
+                "👉 /leaderboard - View top inviters\n"
+                "👉 /myreferrals - Check your referral count\n\n"
+                "✨ <i>You'll get notified when someone joins using your link!</i>"
+            )
+            
+            await update.message.reply_text(
+                welcome_msg,
+                parse_mode='HTML',
+                disable_web_page_preview=True
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in start command: {e}", exc_info=True)
+            error_msg = (
+                "❌ <b>Error!</b>\n\n"
+                "Bot permissions check failed. Please ensure:\n"
+                "1️⃣ Bot is an admin in the group\n"
+                "2️⃣ Bot has these admin rights enabled:\n"
+                "   • Can invite users via link\n"
+                "   • Can manage group\n\n"
+                f"Error details: {str(e)}"
+            )
+            await update.message.reply_text(
+                error_msg,
+                parse_mode='HTML'
+            )
+    else:
+        bot_username = context.bot.username
+        await update.message.reply_text(
+            f"📱 <b>Get your referral link in private!</b>\n"
+            f"👉 <a href='https://t.me/{bot_username}?start'>Click here to start</a>",
+            parse_mode='HTML',
+            disable_web_page_preview=True
+        )
+
+async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show top 10 inviters"""
+    try:
+        top_inviters = await db.get_leaderboard()
+        
+        if not top_inviters:
+            await update.message.reply_text("No referrals yet! Be the first to invite someone! 🎯")
+            return
+
+        leaderboard_text = "🏆 <b>Top Inviters</b> 🏆\n\n"
+        for rank, (user_id, referrals) in enumerate(top_inviters, 1):
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, "👤")
+            try:
+                user = await context.bot.get_chat(user_id)
+                username = user.username or user.first_name or str(user_id)
+                leaderboard_text += f"{medal} {rank}. @{username}: {referrals} active referrals\n"
+            except:
+                leaderboard_text += f"{medal} {rank}. User {user_id}: {referrals} active referrals\n"
+
+        await update.message.reply_text(leaderboard_text, parse_mode='HTML')
+    except Exception as e:
+        logger.error(f"Error showing leaderboard: {e}", exc_info=True)
+        await update.message.reply_text("❌ Error fetching leaderboard. Please try again later.")
+
+async def my_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user's referral stats"""
+    try:
+        user_id = update.effective_user.id
+        total_refs = await db.get_total_referrals(user_id)
+        active_refs = await db.get_active_referrals(user_id)
+        
+        stats_text = (
+            "📊 <b>Your Referral Stats</b>\n\n"
+            f"👥 Total Referrals: {total_refs}\n"
+            f"✅ Active Referrals: {active_refs}\n\n"
+            "Use /start to get a new invite link!"
+        )
+        
+        await update.message.reply_text(stats_text, parse_mode='HTML')
+    except Exception as e:
+        logger.error(f"Error showing referral stats: {e}", exc_info=True)
+        await update.message.reply_text("❌ Error fetching your stats. Please try again later.")
+
+def main():
+    token = "7790381038:AAE26s1oHYvlZX2wyY_cW7VsjJmNaxXFlYc"
+    
+    try:
+        application = Application.builder().token(token).build()
+
+        # Add command handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("leaderboard", leaderboard))
+        application.add_handler(CommandHandler("myreferrals", my_referrals))
+        
+        # Add chat member handler with high priority (group=1)
+        application.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.CHAT_MEMBER), group=1)
+
+        logger.info("Starting bot...")
+        logger.info(f"Using group ID: {GROUP_ID}")
+        # Explicitly specify the updates we want to receive
+        application.run_polling(
+            allowed_updates=['chat_member', 'message', 'callback_query'],
+            drop_pending_updates=True
+        )
+        
+    except Exception as e:
+        logger.error(f"Error starting bot: {e}", exc_info=True)
+
+if __name__ == '__main__':
+    main()
