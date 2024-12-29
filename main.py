@@ -228,6 +228,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show top 10 inviters"""
     try:
+        logger.info(f"Leaderboard command received from user {update.effective_user.id} in chat {update.effective_chat.id}")
+        
         top_inviters = await db.get_leaderboard(limit=10)  # Explicitly set limit to 10
         
         if not top_inviters:
@@ -268,6 +270,7 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML',
             disable_web_page_preview=True
         )
+        logger.info("Leaderboard displayed successfully")
     except Exception as e:
         logger.error(f"Error showing leaderboard: {e}", exc_info=True)
         await update.message.reply_text("❌ Error fetching leaderboard. Please try again later.")
@@ -276,6 +279,8 @@ async def my_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user's referral stats"""
     try:
         user_id = update.effective_user.id
+        logger.info(f"My referrals command received from user {user_id} in chat {update.effective_chat.id}")
+        
         total_refs = await db.get_total_referrals(user_id)
         active_refs = await db.get_active_referrals(user_id)
         
@@ -287,6 +292,7 @@ async def my_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         await update.message.reply_text(stats_text, parse_mode='HTML')
+        logger.info(f"Stats displayed for user {user_id}")
     except Exception as e:
         logger.error(f"Error showing referral stats: {e}", exc_info=True)
         await update.message.reply_text("❌ Error fetching your stats. Please try again later.")
@@ -358,14 +364,22 @@ async def main():
         # Initialize bot
         application = Application.builder().token(TOKEN).build()
 
-        # Add command handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("leaderboard", leaderboard))
-        application.add_handler(CommandHandler("myreferrals", my_referrals))
+        # Add command handlers - allow commands in both private and group chats
+        application.add_handler(CommandHandler("start", start, filters.ChatType.PRIVATE | filters.ChatType.GROUPS))
+        application.add_handler(CommandHandler("leaderboard", leaderboard, filters.ChatType.PRIVATE | filters.ChatType.GROUPS))
+        application.add_handler(CommandHandler("myreferrals", my_referrals, filters.ChatType.PRIVATE | filters.ChatType.GROUPS))
         
         # Add chat member handler with high priority (group=1)
         application.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.CHAT_MEMBER), group=1)
 
+        # Set bot commands
+        commands = [
+            BotCommand("start", "Get your referral link"),
+            BotCommand("leaderboard", "View top 10 inviters"),
+            BotCommand("myreferrals", "View your referral stats")
+        ]
+        await application.bot.set_my_commands(commands)
+        
         # Initialize the application
         await application.initialize()
         
