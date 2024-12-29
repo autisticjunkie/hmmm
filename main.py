@@ -20,6 +20,9 @@ db = Database()
 # Your group ID (make sure it starts with -100 for supergroups)
 GROUP_ID = int(os.environ.get('GROUP_ID', '-1002384613497'))
 
+# Admin user ID
+ADMIN_ID = int(os.environ.get('ADMIN_ID', '5044951913'))  # Replace with your Telegram ID
+
 # Webhook settings
 DOMAIN = os.environ.get('DOMAIN', 'bot.patoonsol.xyz').rstrip('/')  # Your Cloudflare domain
 WEBHOOK_PATH = '/webhook'
@@ -297,6 +300,68 @@ async def my_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error showing referral stats: {e}", exc_info=True)
         await update.message.reply_text("❌ Error fetching your stats. Please try again later.")
 
+async def clear_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to clear all referral counts"""
+    try:
+        user_id = update.effective_user.id
+        logger.info(f"Clear leaderboard command received from user {user_id}")
+        
+        # Check if user is admin
+        if user_id != ADMIN_ID:
+            logger.warning(f"Unauthorized clear attempt by user {user_id}")
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        # Ask for confirmation
+        confirmation_text = (
+            "⚠️ <b>Warning!</b> ⚠️\n\n"
+            "This will reset ALL referral counts to zero.\n"
+            "This action cannot be undone.\n\n"
+            "Are you sure? Reply with /confirmclear to proceed."
+        )
+        context.user_data['awaiting_clear_confirmation'] = True
+        await update.message.reply_text(confirmation_text, parse_mode='HTML')
+        
+    except Exception as e:
+        logger.error(f"Error in clear_leaderboard: {e}", exc_info=True)
+        await update.message.reply_text("❌ An error occurred. Please try again later.")
+
+async def confirm_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm clearing the leaderboard"""
+    try:
+        user_id = update.effective_user.id
+        logger.info(f"Clear confirmation received from user {user_id}")
+        
+        # Check if user is admin
+        if user_id != ADMIN_ID:
+            logger.warning(f"Unauthorized clear confirmation attempt by user {user_id}")
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+            
+        # Check if confirmation was requested
+        if not context.user_data.get('awaiting_clear_confirmation'):
+            await update.message.reply_text("❌ Please use /clearleaderboard first.")
+            return
+            
+        # Clear the confirmation flag
+        context.user_data['awaiting_clear_confirmation'] = False
+        
+        # Clear all referrals
+        if await db.clear_all_referrals():
+            success_text = (
+                "✅ <b>Leaderboard Cleared!</b>\n\n"
+                "All referral counts have been reset to zero.\n"
+                "Users can start inviting again!"
+            )
+            await update.message.reply_text(success_text, parse_mode='HTML')
+            logger.info("Leaderboard cleared successfully")
+        else:
+            await update.message.reply_text("❌ Failed to clear leaderboard. Please try again.")
+            
+    except Exception as e:
+        logger.error(f"Error in confirm_clear: {e}", exc_info=True)
+        await update.message.reply_text("❌ An error occurred. Please try again later.")
+
 async def setup_webhook(application: Application) -> None:
     webhook_info = await application.bot.get_webhook_info()
     
@@ -368,6 +433,8 @@ async def main():
         application.add_handler(CommandHandler("start", start, filters.ChatType.PRIVATE | filters.ChatType.GROUPS))
         application.add_handler(CommandHandler("leaderboard", leaderboard, filters.ChatType.PRIVATE | filters.ChatType.GROUPS))
         application.add_handler(CommandHandler("myreferrals", my_referrals, filters.ChatType.PRIVATE | filters.ChatType.GROUPS))
+        application.add_handler(CommandHandler("clearleaderboard", clear_leaderboard, filters.ChatType.PRIVATE | filters.ChatType.GROUPS))
+        application.add_handler(CommandHandler("confirmclear", confirm_clear, filters.ChatType.PRIVATE | filters.ChatType.GROUPS))
         
         # Add chat member handler with high priority (group=1)
         application.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.CHAT_MEMBER), group=1)
@@ -376,7 +443,9 @@ async def main():
         commands = [
             BotCommand("start", "Get your referral link"),
             BotCommand("leaderboard", "View top 10 inviters"),
-            BotCommand("myreferrals", "View your referral stats")
+            BotCommand("myreferrals", "View your referral stats"),
+            BotCommand("clearleaderboard", "Clear all referral counts (admin only)"),
+            BotCommand("confirmclear", "Confirm clearing the leaderboard (admin only)")
         ]
         await application.bot.set_my_commands(commands)
         

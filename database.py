@@ -195,3 +195,15 @@ class Database:
         except Exception as e:
             self.logger.error(f"Error getting leaderboard: {e}", exc_info=True)
             return []
+
+    async def clear_all_referrals(self) -> bool:
+        """Reset all referral counts to zero"""
+        try:
+            async with aiosqlite.connect(self.db_name) as db:
+                await db.execute('UPDATE users SET referrals = 0')
+                await db.commit()
+                self.logger.info("All referral counts reset to zero")
+                return True
+        except Exception as e:
+            self.logger.error(f"Error clearing referrals: {e}", exc_info=True)
+            return False
