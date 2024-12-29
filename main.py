@@ -21,9 +21,9 @@ db = Database()
 GROUP_ID = -1002384613497
 
 # Webhook settings
-RENDER_DOMAIN = os.environ.get('RENDER_DOMAIN', 'your-app-name.onrender.com').rstrip('/')  # Your Render domain
+DOMAIN = os.environ.get('DOMAIN', 'bot.patoonsol.xyz').rstrip('/')  # Your Cloudflare domain
 WEBHOOK_PATH = '/webhook'
-WEBHOOK_URL = f"https://{RENDER_DOMAIN}{WEBHOOK_PATH}"
+WEBHOOK_URL = f"https://{DOMAIN}{WEBHOOK_PATH}"
 
 # Port is given by Render
 PORT = int(os.environ.get('PORT', '8080'))
@@ -273,7 +273,7 @@ async def setup_webhook(application: Application) -> None:
     
     # Detailed debug information
     logger.info("=== Webhook Debug Info ===")
-    logger.info(f"RENDER_DOMAIN env var: {os.environ.get('RENDER_DOMAIN', 'not set')}")
+    logger.info(f"DOMAIN env var: {os.environ.get('DOMAIN', 'not set')}")
     logger.info(f"Current webhook URL: {webhook_info.url}")
     logger.info(f"Attempting to set webhook URL: {WEBHOOK_URL}")
     logger.info(f"Bot username: {(await application.bot.get_me()).username}")
@@ -319,6 +319,16 @@ async def main():
         logger.info("Initializing database...")
         await db.init_db()
         logger.info("Database initialized successfully")
+
+        # Get and display server IP
+        try:
+            import socket
+            hostname = socket.gethostname()
+            ip_address = socket.gethostbyname(hostname)
+            logger.info(f"Server hostname: {hostname}")
+            logger.info(f"Server IP address: {ip_address}")
+        except Exception as e:
+            logger.error(f"Failed to get IP address: {e}")
 
         # Initialize bot
         application = Application.builder().token(TOKEN).build()
