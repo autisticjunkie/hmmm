@@ -23,10 +23,19 @@ class Database:
                         inviter_id INTEGER,
                         referrals INTEGER DEFAULT 0,
                         is_member BOOLEAN DEFAULT TRUE,
+                        has_chatted BOOLEAN DEFAULT FALSE,
                         join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (inviter_id) REFERENCES users(telegram_id)
                     )
                 ''')
+                
+                # Add has_chatted column to existing table if it doesn't exist
+                try:
+                    await db.execute('ALTER TABLE users ADD COLUMN has_chatted BOOLEAN DEFAULT FALSE')
+                    self.logger.info("Added has_chatted column to users table")
+                except:
+                    self.logger.info("has_chatted column already exists")
+                
                 await db.commit()
                 self.logger.info("Database initialized successfully")
                 
@@ -84,7 +93,7 @@ class Database:
                 
                 # Add new user
                 await db.execute(
-                    'INSERT INTO users (telegram_id, inviter_id, is_member) VALUES (?, ?, TRUE)',
+                    'INSERT INTO users (telegram_id, inviter_id, is_member, has_chatted) VALUES (?, ?, TRUE, FALSE)',
                     (telegram_id, inviter_id)
                 )
                 
@@ -160,31 +169,82 @@ class Database:
             return 0
 
     async def get_active_referrals(self, telegram_id: int) -> int:
-        """Get number of active referrals for a user"""
+        """Get number of active referrals (who have chatted) for a user"""
         try:
             async with aiosqlite.connect(self.db_name) as db:
                 async with db.execute(
-                    'SELECT referrals FROM users WHERE telegram_id = ?',
+                    '''
+                    SELECT COUNT(*) 
+                    FROM users 
+                    WHERE inviter_id = ? 
+                    AND is_member = TRUE 
+                    AND has_chatted = TRUE
+                    ''',
                     (telegram_id,)
                 ) as cursor:
                     result = await cursor.fetchone()
                     count = result[0] if result else 0
-                    self.logger.info(f"User {telegram_id} has {count} active referrals")
+                    self.logger.info(f"User {telegram_id} has {count} active chatting referrals")
                     return count
         except Exception as e:
             self.logger.error(f"Error getting active referrals: {e}", exc_info=True)
             return 0
 
+    async def mark_user_chatted(self, telegram_id: int) -> bool:
+        """Mark a user as having chatted and update inviter's referral count if needed"""
+        try:
+            async with aiosqlite.connect(self.db_name) as db:
+                # Get user's current status and inviter
+                async with db.execute(
+                    'SELECT has_chatted, inviter_id FROM users WHERE telegram_id = ?',
+                    (telegram_id,)
+                ) as cursor:
+                    result = await cursor.fetchone()
+                    if not result:
+                        return False
+                    
+                    has_chatted, inviter_id = result
+                    
+                    # If user hasn't chatted before
+                    if not has_chatted:
+                        # Mark as chatted
+                        await db.execute(
+                            'UPDATE users SET has_chatted = TRUE WHERE telegram_id = ?',
+                            (telegram_id,)
+                        )
+                        
+                        # If they have an inviter, increment their referral count
+                        if inviter_id:
+                            await db.execute(
+                                'UPDATE users SET referrals = referrals + 1 WHERE telegram_id = ?',
+                                (inviter_id,)
+                            )
+                            self.logger.info(f"Incremented referral count for inviter {inviter_id} after user {telegram_id} chatted")
+                        
+                        await db.commit()
+                        return True
+                    
+                    return False
+                    
+        except Exception as e:
+            self.logger.error(f"Error marking user as chatted: {e}", exc_info=True)
+            return False
+
     async def get_leaderboard(self, limit: int = 10) -> list:
-        """Get top inviters with active referrals"""
+        """Get top inviters with active chatting referrals"""
         try:
             async with aiosqlite.connect(self.db_name) as db:
                 async with db.execute(
                     '''
-                    SELECT telegram_id, referrals 
-                    FROM users 
-                    WHERE referrals > 0 AND is_member = TRUE
-                    ORDER BY referrals DESC 
+                    SELECT u.telegram_id, COUNT(r.telegram_id) as referral_count
+                    FROM users u
+                    LEFT JOIN users r ON r.inviter_id = u.telegram_id 
+                        AND r.is_member = TRUE 
+                        AND r.has_chatted = TRUE
+                    WHERE u.is_member = TRUE
+                    GROUP BY u.telegram_id
+                    HAVING referral_count > 0
+                    ORDER BY referral_count DESC
                     LIMIT ?
                     ''',
                     (limit,)

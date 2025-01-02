@@ -362,6 +362,22 @@ async def confirm_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in confirm_clear: {e}", exc_info=True)
         await update.message.reply_text("❌ An error occurred. Please try again later.")
 
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle messages to track user activity"""
+    try:
+        # Only track messages in the target group
+        if update.effective_chat.id != GROUP_ID:
+            return
+
+        user_id = update.effective_user.id
+        logger.info(f"Message received from user {user_id}")
+        
+        # Mark user as having chatted
+        await db.mark_user_chatted(user_id)
+        
+    except Exception as e:
+        logger.error(f"Error handling message: {e}", exc_info=True)
+
 async def setup_webhook(application: Application) -> None:
     webhook_info = await application.bot.get_webhook_info()
     
@@ -435,6 +451,9 @@ async def main():
         application.add_handler(CommandHandler("myreferrals", my_referrals, filters.ChatType.PRIVATE | filters.ChatType.GROUPS))
         application.add_handler(CommandHandler("clearleaderboard", clear_leaderboard, filters.ChatType.PRIVATE | filters.ChatType.GROUPS))
         application.add_handler(CommandHandler("confirmclear", confirm_clear, filters.ChatType.PRIVATE | filters.ChatType.GROUPS))
+        
+        # Add message handler to track chat activity
+        application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_message))
         
         # Add chat member handler with high priority (group=1)
         application.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.CHAT_MEMBER), group=1)
